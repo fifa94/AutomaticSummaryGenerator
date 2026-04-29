@@ -1,0 +1,3 @@
+# Spustí výkaz každého 1. v měsíci v 8:00
+0 8 1 * * root cd /app && python ApiScraperFromKimai.py >> /var/log/kimai.log 2>&1
+

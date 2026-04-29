@@ -1,0 +1,8 @@
+.env
+.venv/
+output/
+obrazy_ke_zpracovani/
+.git/
+.idea/
+__pycache__/
+*.pyc

@@ -1,19 +1,19 @@
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from docx import Document
 from docx.shared import Pt, RGBColor
 import os, ssl, smtplib
 from email.message import EmailMessage
 from dotenv import load_dotenv, find_dotenv
-import os
 
-# Načte .env (hledá v aktuálním adresáři a výše)
 load_dotenv(find_dotenv())
 
-# Nastavení
-API_URL = "http://192.168.100.8:8001/api/timesheets"
-USERNAME = "admin"
+API_URL = os.getenv('KIMAI_API_URL', 'http://192.168.100.8:8001/api/timesheets')
+ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL', 'http://192.168.100.8:8001/api/activities')
+PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Lexikografický projekt 1')
 BEARER_TOKEN = os.getenv('KIMAI_API_TOKEN')
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/app/output')
+USERNAME = "admin"
 HOURLY_RATE = 350  # Kč za hodinu
 CZECH_MONTHS = {
     1:  'leden',
@@ -30,49 +30,25 @@ CZECH_MONTHS = {
     12: 'prosinec'
 }
 
+
 class ApiScraperFromKimai:
-    """
-    Třída pro stahování a zpracování časových výkazů z API Kimai.
-
-    Tato třída slouží k připojení na Kimai API, stažení dat o odpracovaných hodinách
-    a jejich filtrování podle požadovaného měsíce.
-
-    Attributes:
-        base_url (str): Základní URL adresa API Kimai.
-        api_key (str): API klíč pro autentizaci.
-        username (str): Uživatelské jméno pro přístup.
-        headers (dict): HTTP hlavičky s autorizačním tokenem.
-
-    Example:
-        >>> scraper = ApiScraperFromKimai(API_URL, BEARER_TOKEN, USERNAME)
-        >>> timesheets = scraper.process_timesheets()
-        >>> print(f"Nalezeno {len(timesheets)} záznamů.")
-    """
-
     def __init__(self, base_url: str, api_key: str, username: str):
-        """
-        Inicializace scraperu.
-
-        Args:
-            base_url (str): URL adresa API endpointu.
-            api_key (str): Bearer token pro autentizaci.
-            username (str): Uživatelské jméno.
-        """
         self.base_url = base_url
         self.api_key = api_key
         self.username = username
-        self.headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+        self.headers = {"Authorization": f"Bearer {self.api_key}"}
+
+    def get_active_activity_ids(self):
+        response = requests.get(ACTIVITIES_URL, headers=self.headers, timeout=10)
+        if response.status_code != 200:
+            print("Chyba při stahování aktivit:", response.status_code, response.text)
+            return []
+        activities = response.json()
+        ids = [a['id'] for a in activities if a.get('visible') is True and a.get('parentTitle') == PROJECT_TITLE]
+        print(f"Aktivní activity IDs pro '{PROJECT_TITLE}': {ids}")
+        return ids
 
     def get_timesheets(self):
-        """
-        Stáhne seznam časových výkazů z API Kimai.
-
-        Returns:
-            list: Seznam slovníků s daty o výkazech, nebo None při chybě.
-
-        Raises:
-            Vytiskne chybovou zprávu, pokud API vrátí status kód jiný než 200.
-        """
         response = requests.get(self.base_url, headers=self.headers, timeout=10)
         if response.status_code != 200:
             print("Chyba při stahování dat:", response.status_code, response.text)
@@ -80,21 +56,6 @@ class ApiScraperFromKimai:
         return response.json()
 
     def process_timesheets(self):
-        """
-        Zpracuje timesheety za předchozí měsíc.
-
-        Filtruje časové výkazy podle měsíce a roku, převádí dobu trvání
-        na formát H:MM a vrací strukturovaná data.
-
-        Returns:
-            list: Seznam slovníků s klíči 'Date', 'From', 'To', 'Duration',
-                  nebo None při chybě.
-
-        Example:
-            >>> filtered_data = scraper.process_timesheets()
-            >>> for record in filtered_data:
-            ...     print(f"{record["Date"]}: {record['Duration']} hodin")
-        """
         timesheets = self.get_timesheets()
         if timesheets is None:
             print("Nepodařilo se získat timesheety.")
@@ -102,16 +63,22 @@ class ApiScraperFromKimai:
 
         current_date = datetime.now()
 
-        if current_date.month == 1:
+        is_test = bool(os.getenv('SMTP_TO_OVERRIDE'))
+        if is_test:
+            first_day_previous = datetime(current_date.year, current_date.month, 1)
+        elif current_date.month == 1:
             first_day_previous = datetime(current_date.year - 1, 12, 1)
         else:
             first_day_previous = datetime(current_date.year, current_date.month - 1, 1)
+
+        active_ids = self.get_active_activity_ids()
 
         filtered = []
         for ts in timesheets:
             begin_str = ts["begin"]
             begin_dt = datetime.strptime(begin_str, "%Y-%m-%dT%H:%M:%S%z")
-            if first_day_previous.month == begin_dt.month and first_day_previous.year == begin_dt.year and ts['billable'] is True:
+            activity_id = ts.get('activity', {}).get('id') if isinstance(ts.get('activity'), dict) else ts.get('activity')
+            if first_day_previous.month == begin_dt.month and first_day_previous.year == begin_dt.year and ts['billable'] is True and activity_id in active_ids:
                 filtered.append({
                     "Date": begin_dt,
                     "From": begin_dt.strftime("%H:%M"),
@@ -122,6 +89,7 @@ class ApiScraperFromKimai:
         print("Zpracování dokončeno.")
         return filtered
 
+
 class DocumentGenerator:
     def __init__(self, data, hourly_rate):
         self.data = data
@@ -129,16 +97,23 @@ class DocumentGenerator:
         self.file_name = ""
 
     def generate_document(self):
-
         if self.data is None or len(self.data) == 0:
             print("Žádná data k vytvoření dokumentu.")
             return
 
         heading_month = CZECH_MONTHS[self.data[0]["Date"].month]
+        doc_year = self.data[0]["Date"].year
+
+        today = datetime.now()
+        if os.getenv('SMTP_TO_OVERRIDE'):
+            sign_date = today.strftime('%d.%m.%Y')
+        else:
+            first_of_this_month = today.replace(day=1)
+            sign_date = (first_of_this_month - timedelta(days=1)).strftime('%d.%m.%Y')
 
         doc = Document()
-        # heading
-        headingText = f'Výkaz odpracované doby zaměstnancem u dohody o pracovní činnosti za měsíc {heading_month} roku {self.data[0]["Date"].year}'
+
+        headingText = f'Výkaz odpracované doby zaměstnancem u dohody o pracovní činnosti za měsíc {heading_month} roku {doc_year}'
         heading = doc.add_heading(headingText, level=1)
         runHeading = heading.runs[0]
         runHeading.font.name = 'Arial'
@@ -146,20 +121,17 @@ class DocumentGenerator:
         runHeading.bold = True
         runHeading.font.color.rgb = RGBColor(0, 0, 0)
 
-        # Intro
         intro = doc.add_paragraph()
-        run = intro.add_run("Práce je po dohodě smluvních stran vykonávána na dálku. V souladu s § 87a zákoníku práce si bude zaměstnanec pracovní dobu do směn při práci na dálku rozvrhovat sám, práce nebude vykonávána ve dnech svátků, víkendů a v čase od 22:00 do 6:00 hod. Délka směny nesmí přesáhnout 12 hodin. Zároveň se zaměstnanec zavazuje, že při práci na dálku bude dodržovat příslušná ustanovení zákoníku práce upravující přestávky v práci a nepřetržitého denního a týdenního odpočinku.")
-        run.font.name = 'Arial'
-        # worker infor
-        worker = doc.add_paragraph()
-        worker_run = worker.add_run('Zaměstnanec: Ing. Filip Šrámek')
-        worker_run.font.name = 'Arial'
-        # Tabulka – 3 sloupce: Datum, časový interval, počet hodin
-        table = doc.add_table(rows=1, cols=3)
+        run = intro.add_run("Práce je po dohodě smluvních stran vykonávána na dálku. V souladu s § 87a zákoníku práce si bude zaměstnanec pracovní dobu do směn při práci na dálku rozvrhovat sám, práce nebude vykonávána ve dnech svátků, víkendů a v čase od 22:00 do 6:00 hod. Délka směny nesmí přesáhnout 12 hodin. Zároveň se zaměstnanec zavazuje, že při práci na dálku bude dodržovat příslušná ustanovení zákoníku práce upravující přestávky v práci a nepřetržitého denního a týdenního odpočinku.")
         run.font.name = 'Arial'
         run.font.size = Pt(11)
 
-        # ----- 3.1 Vyplnění hlavičky -----
+        worker = doc.add_paragraph()
+        worker_run = worker.add_run('Zaměstnanec: Ing. Filip Šrámek')
+        worker_run.font.name = 'Arial'
+
+        table = doc.add_table(rows=1, cols=3)
+
         hdr_cells = table.rows[0].cells
         hdr_cells[0].text = 'Datum'
         hdr_cells[1].text = 'V čase od:do (včetně uvedení času přestávky)'
@@ -168,25 +140,16 @@ class DocumentGenerator:
         workedHours = 0
 
         def duration_to_minutes(dur: str) -> float:
-            """
-            Převádí řetězec ve tvaru 'H:MM' nebo 'HH:MM' na počet minut.
-            Příklad: '2:30' → 150
-            """
-            # Očistíme případné mezery
             dur = dur.strip()
-            # Rozdělíme na hodiny a minuty
             parts = dur.split(':')
             if len(parts) != 2:
                 raise ValueError(f"Neplatný formát trvání: {dur}")
-
             hours, minutes = parts
-
             intMinutes = int(minutes)
             if int(intMinutes) > 0:
                 intMinutes = intMinutes / 60
             else:
                 intMinutes = 0
-
             return int(hours) + float(intMinutes)
 
         for row in self.data:
@@ -204,65 +167,46 @@ class DocumentGenerator:
         row_cells = table.add_row().cells
         row_cells[1].text = 'Počet hodin odpracovaných celkem/měsíc'
         row_cells[2].text = f'{workedHours:.2f}'
-        # worker infor
+
         worker_location = doc.add_paragraph()
-        worker_location_run = worker_location.add_run('V Praze dne 30.11.2025')
-        worker_location_run.font.name = 'Arial'
+        worker_location.add_run(f'V Praze dne {sign_date}').font.name = 'Arial'
 
-        # worker infor
         worker_sign = doc.add_paragraph()
-        worker_sign_run = worker_sign.add_run('Podpis zaměstnance: Filip Šrámek')
-        worker_sign_run.font.name = 'Arial'
+        worker_sign.add_run('Podpis zaměstnance: Filip Šrámek').font.name = 'Arial'
 
-        # legal paragraph 2
-        paragraphtext = f'Potvrzení o převzetí dokončené práce na základě dohody o dohody o pracovní činnosti č. 1/2025 za měsíc {heading_month} roku {self.data[0]["Date"].year}.'
-
+        paragraphtext = f'Potvrzení o převzetí dokončené práce na základě dohody o dohody o pracovní činnosti č. 1/2025 za měsíc {heading_month} roku {doc_year}.'
         legalParagraph2 = doc.add_paragraph()
         legalParagraph2_run = legalParagraph2.add_run(paragraphtext)
         legalParagraph2_run.font.name = 'Arial'
         legalParagraph2_run.bold = True
 
-        summaryParagraph1 = f'Práci, k níž se '
-        summaryParagraph2 = f'Ing. Filip Šrámek'
-        summaryParagraph3 = f' zavázal na základě dohody ze dne 11.11.2025, převzal odpovědný pracovník ÚJČ AV ČR, Mgr. Ondřej Svoboda, ve sjednaném rozsahu a kvalitě.Při provedení práce bylo odpracováno celkem {workedHours:.2f} hodin. K výplatě dle dohody náleží pracovníkovi částka ve výši {workedHours * HOURLY_RATE:.2f}Kč.'
-
         summary_par = doc.add_paragraph()
-
-        # Text před ztučněním
-        run1 = summary_par.add_run(summaryParagraph1)
+        run1 = summary_par.add_run('Práci, k níž se ')
         run1.font.name = 'Arial'
-
-        # **Ztučněná část** – např. počet odpracovaných hodin
-        run2 = summary_par.add_run(summaryParagraph2)
+        run2 = summary_par.add_run('Ing. Filip Šrámek')
         run2.font.name = 'Arial'
-        run2.bold = True                     # ← ztučnění
-
-        # Zbytek odstavce (neztučněný)
-        run3 = summary_par.add_run(summaryParagraph3)
+        run2.bold = True
+        run3 = summary_par.add_run(f' zavázal na základě dohody ze dne 11.11.2025, převzal odpovědný pracovník ÚJČ AV ČR, Mgr. Ondřej Svoboda, ve sjednaném rozsahu a kvalitě.Při provedení práce bylo odpracováno celkem {workedHours:.2f} hodin. K výplatě dle dohody náleží pracovníkovi částka ve výši {workedHours * HOURLY_RATE:.2f}Kč.')
         run3.font.name = 'Arial'
 
-        # worker infor
-        worker_location = doc.add_paragraph()
-        worker_location_run = worker_location.add_run('V Praze dne 30.11.2025')
-        worker_location_run.font.name = 'Arial'
+        worker_location2 = doc.add_paragraph()
+        worker_location2.add_run(f'V Praze dne {sign_date}').font.name = 'Arial'
 
-        #controller worker sign
         ControllerWorkerSign = doc.add_paragraph()
-        ControllerWorkerSign_run =ControllerWorkerSign.add_run('Podpis odpovědného pracovníka:')
-        ControllerWorkerSign_run.font.name = 'Arial'
+        ControllerWorkerSign.add_run('Podpis odpovědného pracovníka:').font.name = 'Arial'
 
-        #Check date and sign
         check_date = doc.add_paragraph()
-        check_date_run = check_date.add_run('Kontrola a proplacení provedeno dne                                       podpis:  ')
-        check_date_run.font.name = 'Arial'
+        check_date.add_run('Kontrola a proplacení provedeno dne                                       podpis:  ').font.name = 'Arial'
 
-        self.file_name = f'Filip_Šrámek_Export_Měsíc_{heading_month}_{self.data[0]["Date"].year}.docx'
-
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        file_name = f'Filip_Šrámek_Export_Měsíc_{heading_month}_{doc_year}.docx'
+        self.file_name = os.path.join(OUTPUT_DIR, file_name)
         doc.save(self.file_name)
         print(f'Dokument uložen jako {self.file_name}')
 
     def get_file_name(self):
         return self.file_name
+
 
 class SendEmail:
     def __init__(self, smtp_server, port, username, password):
@@ -271,11 +215,10 @@ class SendEmail:
         self.username = username
         self.password = password
 
-    def send_email(self, attachment_path):
+    def send_email(self, attachment_path, recipient):
         msg = EmailMessage()
         msg['From'] = self.username
-        #msg['To'] = "svoboda@ujc.cas.cz"
-        msg['To'] = "fifa94@seznam.cz"
+        msg['To'] = recipient
         msg['Subject'] = "Výkaz odpracované doby - Filip Šrámek"
         msg.set_content("Dobrý den,\n\nv příloze zasílám výkaz odpracované doby za uplynulý měsíc.\n\nS pozdravem,\nFilip Šrámek")
 
@@ -285,7 +228,8 @@ class SendEmail:
             file_data,
             maintype="application",
             subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
-            filename=os.path.basename(attachment_path),)
+            filename=os.path.basename(attachment_path),
+        )
         context = ssl.create_default_context()
         try:
             with smtplib.SMTP(self.smtp_server, self.port, timeout=10) as smtp:
@@ -303,5 +247,14 @@ if __name__ == "__main__":
     scraper = ApiScraperFromKimai(API_URL, BEARER_TOKEN, USERNAME)
     document = DocumentGenerator(scraper.process_timesheets(), HOURLY_RATE)
     document.generate_document()
-    email = SendEmail("smtp.gmail.com", 587, "sramek.filip@gmail.com", "gcpx vrdm rlnr gllx")
-    email.send_email(document.get_file_name())
+
+    smtp_user = os.getenv('SMTP_USER')
+    smtp_pass = os.getenv('SMTP_PASS')
+    smtp_to = os.getenv('SMTP_TO_OVERRIDE') or os.getenv('SMTP_TO')
+    if document.get_file_name() and smtp_user and smtp_pass and smtp_to:
+        email = SendEmail("smtp.gmail.com", 587, smtp_user, smtp_pass)
+        email.send_email(document.get_file_name(), smtp_to)
+    elif not document.get_file_name():
+        print("Dokument nebyl vytvořen — e-mail nebyl odeslán.")
+    else:
+        print("SMTP proměnné nejsou nastaveny — e-mail nebyl odeslán.")

@@ -1,4 +1,7 @@
 /*.csv
 /*.docx
 /*.xlsx
-/*.env
+.env
+output/
+.venv/
+obrazy_ke_zpracovani/

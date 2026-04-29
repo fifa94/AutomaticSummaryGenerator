@@ -1,0 +1,9 @@
+services:
+  kimai-report:
+    build: .
+    container_name: kimai-report
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output

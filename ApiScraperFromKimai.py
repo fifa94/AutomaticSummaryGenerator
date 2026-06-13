@@ -1,3 +1,4 @@
+from urllib import response
 import requests
 from datetime import datetime, timedelta
 from docx import Document
@@ -7,9 +8,14 @@ from email.message import EmailMessage
 from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
-
-API_URL = os.getenv('KIMAI_API_URL', 'http://192.168.100.8:8001/api/timesheets')
-ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL', 'http://192.168.100.8:8001/api/activities')
+URL_LIST = [
+    "http://192.168.100.8:8001",
+    "http://192.168.191.211:8001"
+]
+#API_URL = os.getenv('KIMAI_API_URL', 'http://192.168.100.8:8001/api/timesheets')
+#ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL', 'http://192.168.100.8:8001/api/activities')
+API_URL = os.getenv('KIMAI_API_URL')
+ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL')
 PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Lexikografický projekt 1')
 BEARER_TOKEN = os.getenv('KIMAI_API_TOKEN')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/app/output')
@@ -39,7 +45,8 @@ class ApiScraperFromKimai:
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
 
     def get_active_activity_ids(self):
-        response = requests.get(ACTIVITIES_URL, headers=self.headers, timeout=10)
+        activities_url = f"{self.base_url}/api/activities"
+        response = requests.get(activities_url, headers=self.headers, timeout=10)
         if response.status_code != 200:
             print("Chyba při stahování aktivit:", response.status_code, response.text)
             return []
@@ -49,7 +56,7 @@ class ApiScraperFromKimai:
         return ids
 
     def get_timesheets(self):
-        response = requests.get(self.base_url, headers=self.headers, timeout=10)
+        response = requests.get(self.base_url + "/api/timesheets", headers=self.headers, timeout=10)
         if response.status_code != 200:
             print("Chyba při stahování dat:", response.status_code, response.text)
             return None
@@ -62,8 +69,8 @@ class ApiScraperFromKimai:
             return None
 
         current_date = datetime.now()
-
-        is_test = bool(os.getenv('SMTP_TO_OVERRIDE'))
+        SMTP_TO_OVERRIDE = os.getenv('SMTP_TO_OVERRIDE')
+        is_test = SMTP_TO_OVERRIDE is not None and SMTP_TO_OVERRIDE.strip() != ""
         if is_test:
             first_day_previous = datetime(current_date.year, current_date.month, 1)
         elif current_date.month == 1:
@@ -72,23 +79,60 @@ class ApiScraperFromKimai:
             first_day_previous = datetime(current_date.year, current_date.month - 1, 1)
 
         active_ids = self.get_active_activity_ids()
-
+        monthly_difference = 0
         filtered = []
         for ts in timesheets:
             begin_str = ts["begin"]
             begin_dt = datetime.strptime(begin_str, "%Y-%m-%dT%H:%M:%S%z")
             activity_id = ts.get('activity', {}).get('id') if isinstance(ts.get('activity'), dict) else ts.get('activity')
             if first_day_previous.month == begin_dt.month and first_day_previous.year == begin_dt.year and ts['billable'] is True and activity_id in active_ids:
+                from_time_unrounded = begin_dt.strftime("%H:%M")
+                to_time_unrounded = ts["end"] and datetime.strptime(ts["end"], "%Y-%m-%dT%H:%M:%S%z").strftime("%H:%M") or ""
+                from_time_rounded, from_minutes_difference = self.time_rounding(from_time_unrounded)
+                to_time_rounded, to_minutes_difference = self.time_rounding(to_time_unrounded)
+                monthly_difference += to_minutes_difference - from_minutes_difference
+                duration = datetime.strptime(to_time_rounded, '%H:%M') - datetime.strptime(from_time_rounded, '%H:%M')
+                total_minutes = int(duration.total_seconds() // 60)
+                duration_str = f"{total_minutes // 60}:{total_minutes % 60:02d}"
                 filtered.append({
                     "Date": begin_dt,
-                    "From": begin_dt.strftime("%H:%M"),
-                    "To": ts["end"] and datetime.strptime(ts["end"], "%Y-%m-%dT%H:%M:%S%z").strftime("%H:%M") or "",
-                    "Duration": str(int(ts["duration"] // 3600)) + ":" + str(int((ts["duration"] % 3600) // 60)).zfill(2)
+                    "From": from_time_rounded,
+                    "To": to_time_rounded,
+                    "Duration": duration_str
                 })
 
         print("Zpracování dokončeno.")
+
+        monthly_diff_obj = datetime.strptime("00:00", "%H:%M")
+        monthly_diff_obj += timedelta(minutes=monthly_difference)
+        if monthly_diff_obj.minute < 45:
+            monthly_diff_obj = monthly_diff_obj.replace(minute=45)
+        else:
+            monthly_diff_obj += timedelta(hours=1)
+            monthly_diff_obj = monthly_diff_obj.replace(minute=0)
+
+        filtered.append({
+            "Date": datetime.strptime("00:00", "%H:%M"),
+            "From": "00:00",
+            "To": "00:00",
+            "Duration": f"{monthly_diff_obj.hour}:{monthly_diff_obj.minute:02d}"
+        })
         return filtered
 
+    def time_rounding(self, time_str):
+        time_obj = datetime.strptime(time_str, "%H:%M")
+        minutes = time_obj.minute
+
+        if minutes >= 55:
+            rounded_minutes = 0
+            time_obj += timedelta(hours=1)
+            minutes_difference = minutes - 60
+        else:
+            rounded_minutes = (minutes // 15) * 15
+            minutes_difference = minutes - rounded_minutes
+
+        rounded_time = time_obj.replace(minute=rounded_minutes)
+        return rounded_time.strftime("%H:%M"), minutes_difference
 
 class DocumentGenerator:
     def __init__(self, data, hourly_rate):
@@ -243,9 +287,27 @@ class SendEmail:
             print("Chyba při odesílání e-mailu:", e)
 
 
+def is_host_reachable(url, timeout=3):
+    try:
+        requests.get(url, timeout=timeout)
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
+
 if __name__ == "__main__":
-    scraper = ApiScraperFromKimai(API_URL, BEARER_TOKEN, USERNAME)
-    document = DocumentGenerator(scraper.process_timesheets(), HOURLY_RATE)
+
+    if is_host_reachable(URL_LIST[0]):
+        active_host = URL_LIST[0]
+    else:
+        active_host = URL_LIST[1]
+
+    scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, USERNAME)
+    ACTIVITIES_URL = ACTIVITIES_URL or f"{active_host}/api/activities"
+
+    data = scraper.process_timesheets()
+
+    document = DocumentGenerator(data, HOURLY_RATE)
     document.generate_document()
 
     smtp_user = os.getenv('SMTP_USER')

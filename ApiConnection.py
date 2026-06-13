@@ -12,6 +12,7 @@ API_KEY = os.getenv('KIMAI_API_TOKEN')
 
 TEST_URLS = [
     "http://192.168.100.8:8001",
+    "http://192.168.191.211:8001",
 ]
 
 API_ACTIVITY_SUFFIX = "/api/activities"

@@ -283,8 +283,10 @@ class SendEmail:
                 smtp.login(self.username, self.password)
                 smtp.send_message(msg)
                 print("E-mail byl úspěšně odeslán.")
+            return True
         except Exception as e:
             print("Chyba při odesílání e-mailu:", e)
+            return False
 
 
 def is_host_reachable(url, timeout=3):
@@ -306,6 +308,9 @@ if __name__ == "__main__":
     ACTIVITIES_URL = ACTIVITIES_URL or f"{active_host}/api/activities"
 
     data = scraper.process_timesheets()
+    if not data:
+        print("Nepodařilo se získat data z Kimai — končím s chybou.")
+        raise SystemExit(1)
 
     document = DocumentGenerator(data, HOURLY_RATE)
     document.generate_document()
@@ -315,8 +320,11 @@ if __name__ == "__main__":
     smtp_to = os.getenv('SMTP_TO_OVERRIDE') or os.getenv('SMTP_TO')
     if document.get_file_name() and smtp_user and smtp_pass and smtp_to:
         email = SendEmail("smtp.gmail.com", 587, smtp_user, smtp_pass)
-        email.send_email(document.get_file_name(), smtp_to)
+        if not email.send_email(document.get_file_name(), smtp_to):
+            raise SystemExit(1)
     elif not document.get_file_name():
         print("Dokument nebyl vytvořen — e-mail nebyl odeslán.")
+        raise SystemExit(1)
     else:
         print("SMTP proměnné nejsou nastaveny — e-mail nebyl odeslán.")
+        raise SystemExit(1)

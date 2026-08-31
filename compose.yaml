@@ -1,0 +1,13 @@
+services:
+  kimai-report:
+    build: .
+    image: kimai-report
+    # Jednorazova uloha - profil "job" znamena, ze `docker compose up -d`
+    # (tj. tlacitko Start v Dockge) tuhle sluzbu NEspusti a stack zustane
+    # cisty. Spousti ji systemd timer pres `docker compose run`.
+    profiles: ["job"]
+    restart: "no"
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output

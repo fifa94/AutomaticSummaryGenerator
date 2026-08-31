@@ -1,0 +1,19 @@
+[Unit]
+Description=Kimai - mesicni vykaz odpracovanych hodin (jednorazovy beh v Dockeru)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Stack spravovany v Dockge (vychozi DOCKGE_STACKS_DIR)
+WorkingDirectory=/opt/stacks/kimai-report
+# Image se prebuilduje, aby po zmene kodu bezela aktualni verze
+ExecStartPre=/usr/bin/docker compose --profile job build kimai-report
+# Tri pokusy s 5min pauzou - Kimai server nemusi byt hned dostupny.
+# --rm = kontejner se po dobehnuti smaze, v Dockge tedy nezustane viset.
+ExecStart=/bin/sh -c 'for i in 1 2 3; do /usr/bin/docker compose --profile job run --rm kimai-report && exit 0; echo "pokus $i selhal, cekam 5 min"; sleep 300; done; exit 1'
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=multi-user.target

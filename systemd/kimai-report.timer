@@ -1,0 +1,15 @@
+[Unit]
+Description=Spousti mesicni vykaz z Kimai 1. dne v mesici v 8:00
+Requires=kimai-report.service
+
+[Timer]
+# 1. den v mesici v 08:00 mistniho casu
+OnCalendar=*-*-01 08:00:00
+# Kdyz byl stroj v 8:00 vypnuty, spusti se hned po startu
+Persistent=true
+# Nahodne rozprostreni do 5 minut, aby vsechno nestartovalo naraz
+RandomizedDelaySec=5min
+Unit=kimai-report.service
+
+[Install]
+WantedBy=timers.target

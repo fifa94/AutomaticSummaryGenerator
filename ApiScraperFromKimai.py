@@ -16,7 +16,8 @@ URL_LIST = [
 #ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL', 'http://192.168.100.8:8001/api/activities')
 API_URL = os.getenv('KIMAI_API_URL')
 ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL')
-PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Projekt')
+# Prázdné = všechny viditelné aktivity
+PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', '').strip()
 BEARER_TOKEN = os.getenv('KIMAI_API_TOKEN')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/app/output')
 USERNAME = "admin"
@@ -46,6 +47,12 @@ CZECH_MONTHS = {
 }
 
 
+def activity_matches_project(activity):
+    if activity.get('visible') is not True:
+        return False
+    return not PROJECT_TITLE or activity.get('parentTitle') == PROJECT_TITLE
+
+
 class ApiScraperFromKimai:
     def __init__(self, base_url: str, api_key: str, username: str):
         self.base_url = base_url
@@ -60,8 +67,8 @@ class ApiScraperFromKimai:
             print("Chyba při stahování aktivit:", response.status_code, response.text)
             return []
         activities = response.json()
-        ids = [a['id'] for a in activities if a.get('visible') is True and a.get('parentTitle') == PROJECT_TITLE]
-        print(f"Aktivní activity IDs pro '{PROJECT_TITLE}': {ids}")
+        ids = [a['id'] for a in activities if activity_matches_project(a)]
+        print(f"Aktivní activity IDs pro '{PROJECT_TITLE or 'všechny projekty'}': {ids}")
         return ids
 
     def get_timesheets(self, begin=None, end=None):

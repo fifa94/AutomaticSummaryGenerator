@@ -9,6 +9,7 @@ from ApiScraperFromKimai import (
     ApiScraperFromKimai, DocumentGenerator, SendEmail,
     WORKER_FULLNAME, WORKER_SIGNNAME, EMPLOYER_NAME, SUPERVISOR_NAME,
     AGREEMENT_NO, AGREEMENT_DATE, REPORT_CITY,
+    PROJECT_TITLE, activity_matches_project,
 )
 from database import (
     get_config, save_config, get_report_history, add_report_history,
@@ -42,7 +43,6 @@ def get_kimai_hosts():
     return result
 
 URL_LIST = get_kimai_hosts()
-PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Lexikografický projekt 1')
 
 BEARER_TOKEN = os.getenv('KIMAI_API_TOKEN')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/app/output')
@@ -94,6 +94,10 @@ def parse_period(start_str, end_str):
         start, end = end, start
     return start, end
 
+def no_data_message(scraper, period_start, period_end):
+    start, end = scraper._resolve_period(period_start, period_end)
+    return f"Žádné záznamy v Kimai za období {start:%d.%m.%Y} – {end:%d.%m.%Y}"
+
 def generate_and_send_report(period_start=None, period_end=None):
     """Vygeneruje a odešle report příjemcům z konfigurace.
 
@@ -114,8 +118,9 @@ def generate_and_send_report(period_start=None, period_end=None):
     data = scraper.process_timesheets(period_start=period_start, period_end=period_end)
 
     if not data:
-        add_report_history(config['recipients'], 'failed', error_message='Žádná data k vygenerování')
-        return False, 'Žádná data k vygenerování'
+        message = no_data_message(scraper, period_start, period_end)
+        add_report_history(config['recipients'], 'failed', error_message=message)
+        return False, message
 
     document = DocumentGenerator(data, config['hourly_rate'])
     document.generate_document()
@@ -223,7 +228,7 @@ def preview_report():
         data = scraper.process_timesheets(period_start=period_start, period_end=period_end)
 
         if not data:
-            return jsonify({'error': 'Žádná data pro náhled'}), 404
+            return jsonify({'error': no_data_message(scraper, period_start, period_end)}), 404
 
         preview_data = []
         for row in data:
@@ -253,7 +258,7 @@ def preview_full_report():
         data = scraper.process_timesheets(period_start=period_start, period_end=period_end)
 
         if not data:
-            return jsonify({'error': 'Žádná data pro náhled'}), 404
+            return jsonify({'error': no_data_message(scraper, period_start, period_end)}), 404
 
         heading_month = CZECH_MONTHS[data[0]["Date"].month]
         doc_year = data[0]["Date"].year
@@ -429,7 +434,8 @@ def send_report():
 @app.route('/api/diagnostics', methods=['GET'])
 def diagnostics():
     """Ověří dostupnost Kimai a vrátí, kde případně vázne spojení."""
-    result = {'project_title': PROJECT_TITLE, 'token_set': bool(BEARER_TOKEN), 'hosts': []}
+    result = {'project_title': PROJECT_TITLE or '(všechny projekty)',
+              'token_set': bool(BEARER_TOKEN), 'hosts': []}
     headers = {'Authorization': f'Bearer {BEARER_TOKEN}'}
     for host in URL_LIST:
         entry = {'host': host}
@@ -452,8 +458,7 @@ def diagnostics():
                 acts = r.json()
                 entry['activities_total'] = len(acts)
                 entry['activities_matching_project'] = sum(
-                    1 for a in acts
-                    if a.get('visible') is True and a.get('parentTitle') == PROJECT_TITLE
+                    1 for a in acts if activity_matches_project(a)
                 )
         except Exception as e:
             entry['activities_error'] = str(e)

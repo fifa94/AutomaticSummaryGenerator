@@ -791,7 +791,7 @@
 
                     openModal(html);
                 } else {
-                    showAlert('Žádná data k náhledu', 'info');
+                    showAlert(result.error || 'Žádná data k náhledu', 'info');
                 }
             } catch (error) {
                 showAlert('Chyba: ' + error, 'error');

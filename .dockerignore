@@ -12,3 +12,10 @@ venv/
 *.db
 .DS_Store
 .idea/
+
+# Citlivá data a výstupy — nikdy nepéct do image
+output/
+*.docx
+*.csv
+*.exe
+.env.*

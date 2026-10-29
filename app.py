@@ -460,6 +460,59 @@ def diagnostics():
         result['hosts'].append(entry)
     return jsonify(result)
 
+@app.route('/api/debug-timesheets', methods=['GET'])
+def debug_timesheets():
+    """Ukáže trychtýř filtrů — proč případně nejsou data."""
+    try:
+        period_start, period_end = parse_period(request.args.get('start'), request.args.get('end'))
+        active_host = get_active_host()
+        if not active_host:
+            return jsonify({'error': 'Nelze se připojit k Kimai'}), 500
+
+        scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, 'admin')
+        start_date, end_date = scraper._resolve_period(period_start, period_end)
+        active_ids = scraper.get_active_activity_ids()
+        raw_filtered = scraper.get_timesheets(begin=start_date, end=end_date)
+        raw_all = scraper.get_timesheets()
+
+        def funnel(entries):
+            if entries is None:
+                return {'error': 'API nevrátilo data (None)'}
+            in_range = billable = matched = 0
+            samples = []
+            for ts in entries:
+                try:
+                    bdt = datetime.strptime(ts['begin'], "%Y-%m-%dT%H:%M:%S%z").date()
+                except Exception:
+                    continue
+                aid = ts.get('activity', {}).get('id') if isinstance(ts.get('activity'), dict) else ts.get('activity')
+                inr = start_date <= bdt <= end_date
+                bil = ts.get('billable') is True
+                mat = aid in active_ids
+                if inr:
+                    in_range += 1
+                if bil:
+                    billable += 1
+                if inr and bil and mat:
+                    matched += 1
+                if len(samples) < 8:
+                    samples.append({'date': str(bdt), 'activity_id': aid,
+                                    'billable': ts.get('billable'), 'v_obdobi': inr,
+                                    'aktivita_sedi': mat})
+            return {'celkem': len(entries), 'v_obdobi': in_range,
+                    'billable_true': billable, 'proslo_vsemi_filtry': matched,
+                    'ukazky': samples}
+
+        return jsonify({
+            'obdobi': {'start': str(start_date), 'end': str(end_date)},
+            'aktivni_activity_ids': active_ids,
+            'projekt': PROJECT_TITLE,
+            's_filtrem_obdobi': funnel(raw_filtered),
+            'bez_filtru_obdobi': funnel(raw_all),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/history', methods=['GET'])
 def history():
     """Vrátí historii reportů."""

@@ -3,8 +3,12 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv, find_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 from ApiScraperFromKimai import ApiScraperFromKimai, DocumentGenerator, SendEmail
-from database import get_config, save_config, get_report_history, add_report_history
+from database import (
+    get_config, save_config, get_report_history, add_report_history,
+    has_successful_send_this_month,
+)
 
 load_dotenv(find_dotenv())
 
@@ -55,6 +59,87 @@ def duration_to_hours(dur: str) -> float:
         return 0
     hours, minutes = parts
     return int(hours) + (int(minutes) / 60)
+
+def generate_and_send_report():
+    """Vygeneruje a odešle report příjemcům z konfigurace.
+
+    Vrací (success: bool, message: str). Zapisuje záznam do historie.
+    """
+    config = get_config()
+
+    if not config['recipients']:
+        add_report_history([], 'failed', error_message='Nejsou nastaveni příjemci')
+        return False, 'Nejsou nastaveni příjemci'
+
+    active_host = get_active_host()
+    if not active_host:
+        add_report_history(config['recipients'], 'failed', error_message='Nelze se připojit k Kimai')
+        return False, 'Nelze se připojit k Kimai'
+
+    scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, 'admin')
+    data = scraper.process_timesheets()
+
+    if not data:
+        add_report_history(config['recipients'], 'failed', error_message='Žádná data k vygenerování')
+        return False, 'Žádná data k vygenerování'
+
+    document = DocumentGenerator(data, config['hourly_rate'])
+    document.generate_document()
+    file_name = document.get_file_name()
+
+    if not file_name:
+        add_report_history(config['recipients'], 'failed', error_message='Nepodařilo se vytvořit dokument')
+        return False, 'Nepodařilo se vytvořit dokument'
+
+    smtp_user = os.getenv('SMTP_USER')
+    smtp_pass = os.getenv('SMTP_PASS')
+
+    if not (smtp_user and smtp_pass):
+        add_report_history(config['recipients'], 'failed', error_message='SMTP není konfigurován')
+        return False, 'SMTP není konfigurován'
+
+    email = SendEmail("smtp.gmail.com", 587, smtp_user, smtp_pass)
+
+    for recipient in config['recipients']:
+        if not email.send_email(file_name, recipient):
+            add_report_history(config['recipients'], 'partial_failed',
+                               file_name=os.path.basename(file_name),
+                               error_message=f'Selhání při odeslání {recipient}')
+            return False, f'Selhání při odeslání {recipient}'
+
+    add_report_history(config['recipients'], 'success', file_name=os.path.basename(file_name))
+    return True, os.path.basename(file_name)
+
+def seed_config_from_env():
+    """Při prvním spuštění (prázdná konfigurace) předvyplní příjemce z env SMTP_TO."""
+    config = get_config()
+    if config['recipients']:
+        return
+    smtp_to = os.getenv('SMTP_TO')
+    if not smtp_to:
+        return
+    recipients = [r.strip() for r in smtp_to.split(';') if r.strip()]
+    if recipients:
+        save_config(config['schedule_day'], config['schedule_time'],
+                    recipients, config['enabled'], config['hourly_rate'])
+        print(f"Konfigurace předvyplněna z env SMTP_TO: {recipients}")
+
+def scheduled_check():
+    """Spouští se každou minutu; odešle report v nastavený den a čas."""
+    config = get_config()
+    if not config['enabled']:
+        return
+    now = datetime.now()
+    if now.day != config['schedule_day']:
+        return
+    if now.strftime('%H:%M') != config['schedule_time']:
+        return
+    if has_successful_send_this_month():
+        print("Report už byl tento měsíc odeslán — přeskakuji.")
+        return
+    print(f"Plánované odeslání reportu v {now.strftime('%d.%m.%Y %H:%M')}")
+    success, message = generate_and_send_report()
+    print(f"Výsledek plánovaného odeslání: {success} — {message}")
 
 @app.route('/')
 def index():
@@ -295,52 +380,10 @@ def preview_full_report():
 def send_report():
     """Okamžitě odešle report."""
     try:
-        config = get_config()
-
-        if not config['recipients']:
-            add_report_history([], 'failed', error_message='Nejsou nastaveni příjemci')
-            return jsonify({'error': 'Nejsou nastaveni příjemci'}), 400
-
-        active_host = get_active_host()
-        if not active_host:
-            add_report_history(config['recipients'], 'failed', error_message='Nelze se připojit k Kimai')
-            return jsonify({'error': 'Nelze se připojit k Kimai'}), 500
-
-        scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, 'admin')
-        data = scraper.process_timesheets()
-
-        if not data:
-            add_report_history(config['recipients'], 'failed', error_message='Žádná data k vygenerování')
-            return jsonify({'error': 'Žádná data k vygenerování'}), 400
-
-        document = DocumentGenerator(data, config['hourly_rate'])
-        document.generate_document()
-        file_name = document.get_file_name()
-
-        if not file_name:
-            add_report_history(config['recipients'], 'failed', error_message='Nepodařilo se vytvořit dokument')
-            return jsonify({'error': 'Nepodařilo se vytvořit dokument'}), 500
-
-        smtp_user = os.getenv('SMTP_USER')
-        smtp_pass = os.getenv('SMTP_PASS')
-
-        if smtp_user and smtp_pass:
-            email = SendEmail("smtp.gmail.com", 587, smtp_user, smtp_pass)
-
-            for recipient in config['recipients']:
-                success = email.send_email(file_name, recipient)
-                if not success:
-                    add_report_history(config['recipients'], 'partial_failed',
-                                      file_name=os.path.basename(file_name),
-                                      error_message=f'Selhání při odeslání {recipient}')
-                    return jsonify({'error': f'Selhání při odeslání {recipient}'}), 500
-
-            add_report_history(config['recipients'], 'success', file_name=os.path.basename(file_name))
-            return jsonify({'success': True, 'message': 'Report úspěšně odeslán', 'file': os.path.basename(file_name)})
-        else:
-            add_report_history(config['recipients'], 'failed', error_message='SMTP není konfigurován')
-            return jsonify({'error': 'SMTP není konfigurován'}), 500
-
+        success, message = generate_and_send_report()
+        if success:
+            return jsonify({'success': True, 'message': 'Report úspěšně odeslán', 'file': message})
+        return jsonify({'error': message}), 400
     except Exception as e:
         add_report_history([], 'failed', error_message=str(e))
         return jsonify({'error': f'Chyba: {str(e)}'}), 500
@@ -352,4 +395,12 @@ def history():
     return jsonify({'history': get_report_history(limit)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    seed_config_from_env()
+
+    scheduler = BackgroundScheduler(timezone='Europe/Prague')
+    scheduler.add_job(scheduled_check, 'cron', minute='*', id='monthly_report_check')
+    scheduler.start()
+    print("Scheduler spuštěn — kontroluje odeslání každou minutu.")
+
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
+    app.run(debug=debug, host='0.0.0.0', port=5000, use_reloader=False)

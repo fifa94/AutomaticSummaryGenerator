@@ -1,12 +1,14 @@
 import sqlite3
-import json
+import os
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path('report_config.db')
+DB_PATH = Path(os.getenv('CONFIG_DB_PATH', 'report_config.db'))
 
 def init_db():
     """Inicializuje databázi."""
+    if DB_PATH.parent != Path('.'):
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
@@ -118,3 +120,17 @@ def get_report_history(limit=20):
         })
 
     return history
+
+def has_successful_send_this_month():
+    """Vrátí True, pokud už byl tento kalendářní měsíc úspěšně odeslán report."""
+    init_db()
+    now = datetime.now()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT COUNT(*) FROM report_history
+                 WHERE status = 'success'
+                 AND strftime('%Y-%m', sent_date) = ?''',
+              (now.strftime('%Y-%m'),))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0

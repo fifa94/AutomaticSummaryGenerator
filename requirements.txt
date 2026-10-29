@@ -5,3 +5,4 @@ pandas==2.3.3
 urllib3==2.5.0
 flask==3.0.0
 flask-cors==4.0.0
+apscheduler==3.10.4

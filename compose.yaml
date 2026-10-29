@@ -1,13 +1,20 @@
 services:
   kimai-report:
-    build: .
-    image: kimai-report
-    # Jednorazova uloha - profil "job" znamena, ze `docker compose up -d`
-    # (tj. tlacitko Start v Dockge) tuhle sluzbu NEspusti a stack zustane
-    # cisty. Spousti ji systemd timer pres `docker compose run`.
-    profiles: ["job"]
-    restart: "no"
+    image: fifa94/kimai-report:latest
+    container_name: kimai-report
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
     env_file:
       - .env
+    environment:
+      # Konfigurace (příjemci, den, čas, sazba) se ukládá sem, aby přežila update image
+      - CONFIG_DB_PATH=/app/data/report_config.db
+      - OUTPUT_DIR=/app/output
+      - TZ=Europe/Prague
     volumes:
       - ./output:/app/output
+      - kimai-report-config:/app/data
+
+volumes:
+  kimai-report-config:

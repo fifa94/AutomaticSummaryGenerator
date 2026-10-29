@@ -103,6 +103,9 @@ class ApiScraperFromKimai:
 
         print("Zpracování dokončeno.")
 
+        # Seřadit záznamy od nejstaršího po nejmladší (řádek vyrovnání se přidává až na konec)
+        filtered.sort(key=lambda row: (row["Date"], row["From"]))
+
         monthly_diff_obj = datetime.strptime("00:00", "%H:%M")
         monthly_diff_obj += timedelta(minutes=monthly_difference)
         if monthly_diff_obj.minute < 45:
@@ -111,12 +114,16 @@ class ApiScraperFromKimai:
             monthly_diff_obj += timedelta(hours=1)
             monthly_diff_obj = monthly_diff_obj.replace(minute=0)
 
-        filtered.append({
-            "Date": datetime.strptime("00:00", "%H:%M"),
-            "From": "00:00",
-            "To": "00:00",
-            "Duration": f"{monthly_diff_obj.hour}:{monthly_diff_obj.minute:02d}"
-        })
+        # Řádek vyrovnání se přidá jen pokud je nějaká diferencia
+        if monthly_difference != 0:
+            from_time = datetime.strptime("12:00", "%H:%M")
+            to_time = from_time + timedelta(hours=monthly_diff_obj.hour, minutes=monthly_diff_obj.minute)
+            filtered.append({
+                "Date": current_date,
+                "From": from_time.strftime("%H:%M"),
+                "To": to_time.strftime("%H:%M"),
+                "Duration": f"{monthly_diff_obj.hour}:{monthly_diff_obj.minute:02d}"
+            })
         return filtered
 
     def time_rounding(self, time_str):
@@ -201,7 +208,7 @@ class DocumentGenerator:
             formatted_date = row["Date"].strftime('%d.%m.%Y')
             values = [
                 formatted_date,
-                f"{row['From']} - {row['To']}",
+                f"{row['From']} – {row['To']}",
                 duration_to_minutes(row['Duration'])
             ]
             workedHours += duration_to_minutes(row['Duration'])

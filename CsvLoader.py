@@ -13,6 +13,8 @@ df = pd.read_csv(
     encoding='utf-8',
     parse_dates=['Date']          # ← automaticky převede na datetime
 )
+# Seřadit záznamy od nejstaršího po nejmladší
+df = df.sort_values('Date')
 billingPeriodMonth = df['Date'].dt.month
 HOURLY_RATE = 350  # Kč za hodinu
 CZECH_MONTHS = {
@@ -95,7 +97,7 @@ for row in df.itertuples(index=False):
 
     values = [
         formatted_date,
-        f"{row.From} - {row.To}",
+        f"{row.From} – {row.To}",
         row.Duration
     ]
 

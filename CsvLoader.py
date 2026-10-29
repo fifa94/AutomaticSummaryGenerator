@@ -51,7 +51,7 @@ run = intro.add_run("Práce je po dohodě smluvních stran vykonávána na dálk
 run.font.name = 'Arial'
 # worker infor
 worker = doc.add_paragraph()
-worker_run = worker.add_run('Zaměstnanec: Ing. Jméno Příjmení')
+worker_run = worker.add_run('Zaměstnanec: Jméno Příjmení')
 worker_run.font.name = 'Arial'
 # Tabulka – 3 sloupce: Datum, časový interval, počet hodin
 table = doc.add_table(rows=1, cols=3)
@@ -128,8 +128,8 @@ legalParagraph2_run.font.name = 'Arial'
 legalParagraph2_run.bold = True
 
 summaryParagraph1 = f'Práci, k níž se '
-summaryParagraph2 = f'Ing. Jméno Příjmení'
-summaryParagraph3 = f' zavázal na základě dohody ze dne 11.11.2025, převzal odpovědný pracovník Zaměstnavatel, Mgr. Odpovědný pracovník, ve sjednaném rozsahu a kvalitě.Při provedení práce bylo odpracováno celkem {workedHours:.2f} hodin. K výplatě dle dohody náleží pracovníkovi částka ve výši {workedHours * HOURLY_RATE:.2f}Kč.'
+summaryParagraph2 = f'Jméno Příjmení'
+summaryParagraph3 = f' zavázal na základě dohody ze dne DD.MM.RRRR, převzal odpovědný pracovník Zaměstnavatel, Odpovědný pracovník, ve sjednaném rozsahu a kvalitě.Při provedení práce bylo odpracováno celkem {workedHours:.2f} hodin. K výplatě dle dohody náleží pracovníkovi částka ve výši {workedHours * HOURLY_RATE:.2f}Kč.'
 
 summary_par = doc.add_paragraph()
 
@@ -163,4 +163,4 @@ check_date_run.font.name = 'Arial'
 # -------------------------------------------------
 # 4. Uložení dokumentu
 # -------------------------------------------------
-doc.save(f'JménoPříjmeníExportMěsíc{headingMonth}.docx')
+doc.save(f'ExportMěsíc{headingMonth}.docx')

@@ -5,7 +5,11 @@ import os
 import requests
 from dotenv import load_dotenv, find_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
-from ApiScraperFromKimai import ApiScraperFromKimai, DocumentGenerator, SendEmail
+from ApiScraperFromKimai import (
+    ApiScraperFromKimai, DocumentGenerator, SendEmail,
+    WORKER_FULLNAME, WORKER_SIGNNAME, EMPLOYER_NAME, SUPERVISOR_NAME,
+    AGREEMENT_NO, AGREEMENT_DATE, REPORT_CITY,
+)
 from database import (
     get_config, save_config, get_report_history, add_report_history,
     has_successful_send_this_month,
@@ -352,7 +356,7 @@ def preview_full_report():
                 <p>Práce je po dohodě smluvních stran vykonávána na dálku. V souladu s § 87a zákoníku práce si bude zaměstnanec pracovní dobu do směn při práci na dálku rozvrhovat sám, práce nebude vykonávána ve dnech svátků, víkendů a v čase od 22:00 do 6:00 hod. Délka směny nesmí přesáhnout 12 hodin. Zároveň se zaměstnanec zavazuje, že při práci na dálku bude dodržovat příslušná ustanovení zákoníku práce upravující přestávky v práci a nepřetržitého denního a týdenního odpočinku.</p>
             </div>
 
-            <div class="worker">Zaměstnanec: Ing. Jméno Příjmení</div>
+            <div class="worker">Zaměstnanec: {WORKER_FULLNAME}</div>
 
             <table>
                 <thead>
@@ -373,20 +377,20 @@ def preview_full_report():
 
             <div class="section">
                 <div class="signature">
-                    <p>V Praze dne {sign_date}</p>
-                    <p style="margin-top: 40px;">Podpis zaměstnance: Jméno Příjmení</p>
+                    <p>V {REPORT_CITY} dne {sign_date}</p>
+                    <p style="margin-top: 40px;">Podpis zaměstnance: {WORKER_SIGNNAME}</p>
                 </div>
             </div>
 
             <div class="section">
-                <p><strong>Potvrzení o převzetí dokončené práce na základě dohody o pracovní činnosti č. 1/2025 za měsíc {heading_month} roku {doc_year}.</strong></p>
+                <p><strong>Potvrzení o převzetí dokončené práce na základě dohody o pracovní činnosti č. {AGREEMENT_NO} za měsíc {heading_month} roku {doc_year}.</strong></p>
 
-                <p>Práci, k níž se <strong>Ing. Jméno Příjmení</strong> zavázal na základě dohody ze dne 11.11.2025, převzal odpovědný pracovník Zaměstnavatel, Mgr. Odpovědný pracovník, ve sjednaném rozsahu a kvalitě. Při provedení práce bylo odpracováno celkem <strong>{worked_hours:.2f} hodin</strong>. K výplatě dle dohody náleží pracovníkovi částka ve výši <span class="price">{total_price:.2f} Kč</span>.</p>
+                <p>Práci, k níž se <strong>{WORKER_FULLNAME}</strong> zavázal na základě dohody ze dne {AGREEMENT_DATE}, převzal odpovědný pracovník {EMPLOYER_NAME}, {SUPERVISOR_NAME}, ve sjednaném rozsahu a kvalitě. Při provedení práce bylo odpracováno celkem <strong>{worked_hours:.2f} hodin</strong>. K výplatě dle dohody náleží pracovníkovi částka ve výši <span class="price">{total_price:.2f} Kč</span>.</p>
             </div>
 
             <div class="section">
                 <div class="signature">
-                    <p>V Praze dne {sign_date}</p>
+                    <p>V {REPORT_CITY} dne {sign_date}</p>
                     <p style="margin-top: 40px;">Podpis odpovědného pracovníka:</p>
                 </div>
             </div>

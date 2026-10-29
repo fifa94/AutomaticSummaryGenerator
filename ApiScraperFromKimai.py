@@ -16,11 +16,20 @@ URL_LIST = [
 #ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL', 'http://192.168.100.8:8001/api/activities')
 API_URL = os.getenv('KIMAI_API_URL')
 ACTIVITIES_URL = os.getenv('KIMAI_ACTIVITIES_URL')
-PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Lexikografický projekt 1')
+PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Projekt')
 BEARER_TOKEN = os.getenv('KIMAI_API_TOKEN')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/app/output')
 USERNAME = "admin"
 HOURLY_RATE = 350  # Kč za hodinu
+
+# Identifikační údaje reportu — plní se z env (na serveru), v kódu jsou jen neutrální zástupné hodnoty
+WORKER_FULLNAME = os.getenv('REPORT_WORKER_FULLNAME', 'Jméno Příjmení')
+WORKER_SIGNNAME = os.getenv('REPORT_WORKER_SIGNNAME', WORKER_FULLNAME)
+EMPLOYER_NAME = os.getenv('REPORT_EMPLOYER', 'Zaměstnavatel')
+SUPERVISOR_NAME = os.getenv('REPORT_SUPERVISOR', 'Odpovědný pracovník')
+AGREEMENT_NO = os.getenv('REPORT_AGREEMENT_NO', 'X/RRRR')
+AGREEMENT_DATE = os.getenv('REPORT_AGREEMENT_DATE', 'DD.MM.RRRR')
+REPORT_CITY = os.getenv('REPORT_CITY', 'Praze')
 CZECH_MONTHS = {
     1:  'leden',
     2:  'únor',
@@ -198,7 +207,7 @@ class DocumentGenerator:
         run.font.size = Pt(11)
 
         worker = doc.add_paragraph()
-        worker_run = worker.add_run('Zaměstnanec: Ing. Jméno Příjmení')
+        worker_run = worker.add_run(f'Zaměstnanec: {WORKER_FULLNAME}')
         worker_run.font.name = 'Arial'
 
         table = doc.add_table(rows=1, cols=3)
@@ -240,12 +249,12 @@ class DocumentGenerator:
         row_cells[2].text = f'{workedHours:.2f}'
 
         worker_location = doc.add_paragraph()
-        worker_location.add_run(f'V Praze dne {sign_date}').font.name = 'Arial'
+        worker_location.add_run(f'V {REPORT_CITY} dne {sign_date}').font.name = 'Arial'
 
         worker_sign = doc.add_paragraph()
-        worker_sign.add_run('Podpis zaměstnance: Jméno Příjmení').font.name = 'Arial'
+        worker_sign.add_run(f'Podpis zaměstnance: {WORKER_SIGNNAME}').font.name = 'Arial'
 
-        paragraphtext = f'Potvrzení o převzetí dokončené práce na základě dohody o dohody o pracovní činnosti č. 1/2025 za měsíc {heading_month} roku {doc_year}.'
+        paragraphtext = f'Potvrzení o převzetí dokončené práce na základě dohody o dohody o pracovní činnosti č. {AGREEMENT_NO} za měsíc {heading_month} roku {doc_year}.'
         legalParagraph2 = doc.add_paragraph()
         legalParagraph2_run = legalParagraph2.add_run(paragraphtext)
         legalParagraph2_run.font.name = 'Arial'
@@ -254,14 +263,14 @@ class DocumentGenerator:
         summary_par = doc.add_paragraph()
         run1 = summary_par.add_run('Práci, k níž se ')
         run1.font.name = 'Arial'
-        run2 = summary_par.add_run('Ing. Jméno Příjmení')
+        run2 = summary_par.add_run(WORKER_FULLNAME)
         run2.font.name = 'Arial'
         run2.bold = True
-        run3 = summary_par.add_run(f' zavázal na základě dohody ze dne 11.11.2025, převzal odpovědný pracovník Zaměstnavatel, Mgr. Odpovědný pracovník, ve sjednaném rozsahu a kvalitě.Při provedení práce bylo odpracováno celkem {workedHours:.2f} hodin. K výplatě dle dohody náleží pracovníkovi částka ve výši {workedHours * HOURLY_RATE:.2f}Kč.')
+        run3 = summary_par.add_run(f' zavázal na základě dohody ze dne {AGREEMENT_DATE}, převzal odpovědný pracovník {EMPLOYER_NAME}, {SUPERVISOR_NAME}, ve sjednaném rozsahu a kvalitě.Při provedení práce bylo odpracováno celkem {workedHours:.2f} hodin. K výplatě dle dohody náleží pracovníkovi částka ve výši {workedHours * self.hourly_rate:.2f}Kč.')
         run3.font.name = 'Arial'
 
         worker_location2 = doc.add_paragraph()
-        worker_location2.add_run(f'V Praze dne {sign_date}').font.name = 'Arial'
+        worker_location2.add_run(f'V {REPORT_CITY} dne {sign_date}').font.name = 'Arial'
 
         ControllerWorkerSign = doc.add_paragraph()
         ControllerWorkerSign.add_run('Podpis odpovědného pracovníka:').font.name = 'Arial'
@@ -270,7 +279,8 @@ class DocumentGenerator:
         check_date.add_run('Kontrola a proplacení provedeno dne                                       podpis:  ').font.name = 'Arial'
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        file_name = f'Jméno_Příjmení_Export_Měsíc_{heading_month}_{doc_year}.docx'
+        safe_name = WORKER_SIGNNAME.replace(' ', '_')
+        file_name = f'{safe_name}_Export_Měsíc_{heading_month}_{doc_year}.docx'
         self.file_name = os.path.join(OUTPUT_DIR, file_name)
         doc.save(self.file_name)
         print(f'Dokument uložen jako {self.file_name}')
@@ -290,8 +300,8 @@ class SendEmail:
         msg = EmailMessage()
         msg['From'] = self.username
         msg['To'] = recipient
-        msg['Subject'] = "Výkaz odpracované doby - Jméno Příjmení"
-        msg.set_content("Dobrý den,\n\nv příloze zasílám výkaz odpracované doby za uplynulý měsíc.\n\nS pozdravem,\nJméno Příjmení")
+        msg['Subject'] = f"Výkaz odpracované doby - {WORKER_SIGNNAME}"
+        msg.set_content(f"Dobrý den,\n\nv příloze zasílám výkaz odpracované doby za uplynulý měsíc.\n\nS pozdravem,\n{WORKER_SIGNNAME}")
 
         with open(attachment_path, 'rb') as f:
             file_data = f.read()

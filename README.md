@@ -97,9 +97,19 @@ SMTP_TO=prijem@example.com
 - `Dockerfile` - Docker konfiguraci
 - `requirements.txt` - Python závislosti
 
-## Autor
+## Konfigurace identity reportu
 
-Jméno Příjmení (redacted@example.com)
+Osobní údaje ve výkazu se nastavují přes env proměnné (viz níže), aby nebyly natvrdo v kódu:
+
+```env
+REPORT_WORKER_FULLNAME=Ing. Jméno Příjmení
+REPORT_WORKER_SIGNNAME=Jméno Příjmení
+REPORT_EMPLOYER=Název zaměstnavatele
+REPORT_SUPERVISOR=Mgr. Nadřízený
+REPORT_AGREEMENT_NO=1/2025
+REPORT_AGREEMENT_DATE=11.11.2025
+REPORT_CITY=Praze
+```
 
 ## Licenza
 

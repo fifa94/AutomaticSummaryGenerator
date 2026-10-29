@@ -55,28 +55,48 @@ class ApiScraperFromKimai:
         print(f"Aktivní activity IDs pro '{PROJECT_TITLE}': {ids}")
         return ids
 
-    def get_timesheets(self):
-        response = requests.get(self.base_url + "/api/timesheets", headers=self.headers, timeout=10)
+    def get_timesheets(self, begin=None, end=None):
+        params = {'size': 10000}
+        if begin is not None:
+            params['begin'] = begin.strftime('%Y-%m-%dT00:00:00')
+        if end is not None:
+            params['end'] = end.strftime('%Y-%m-%dT23:59:59')
+        response = requests.get(self.base_url + "/api/timesheets", headers=self.headers,
+                                params=params, timeout=15)
         if response.status_code != 200:
             print("Chyba při stahování dat:", response.status_code, response.text)
             return None
         return response.json()
 
-    def process_timesheets(self):
-        timesheets = self.get_timesheets()
-        if timesheets is None:
-            print("Nepodařilo se získat timesheety.")
-            return None
+    def _resolve_period(self, period_start, period_end):
+        """Vrátí (start_date, end_date) jako date. Bez zadání = celý minulý měsíc."""
+        if period_start is not None and period_end is not None:
+            return period_start, period_end
 
         current_date = datetime.now()
         SMTP_TO_OVERRIDE = os.getenv('SMTP_TO_OVERRIDE')
         is_test = SMTP_TO_OVERRIDE is not None and SMTP_TO_OVERRIDE.strip() != ""
         if is_test:
-            first_day_previous = datetime(current_date.year, current_date.month, 1)
+            first_day = datetime(current_date.year, current_date.month, 1).date()
         elif current_date.month == 1:
-            first_day_previous = datetime(current_date.year - 1, 12, 1)
+            first_day = datetime(current_date.year - 1, 12, 1).date()
         else:
-            first_day_previous = datetime(current_date.year, current_date.month - 1, 1)
+            first_day = datetime(current_date.year, current_date.month - 1, 1).date()
+
+        if first_day.month == 12:
+            last_day = datetime(first_day.year, 12, 31).date()
+        else:
+            last_day = (datetime(first_day.year, first_day.month + 1, 1) - timedelta(days=1)).date()
+        return first_day, last_day
+
+    def process_timesheets(self, period_start=None, period_end=None):
+        start_date, end_date = self._resolve_period(period_start, period_end)
+
+        current_date = datetime.now()
+        timesheets = self.get_timesheets(begin=start_date, end=end_date)
+        if timesheets is None:
+            print("Nepodařilo se získat timesheety.")
+            return None
 
         active_ids = self.get_active_activity_ids()
         monthly_difference = 0
@@ -85,7 +105,7 @@ class ApiScraperFromKimai:
             begin_str = ts["begin"]
             begin_dt = datetime.strptime(begin_str, "%Y-%m-%dT%H:%M:%S%z")
             activity_id = ts.get('activity', {}).get('id') if isinstance(ts.get('activity'), dict) else ts.get('activity')
-            if first_day_previous.month == begin_dt.month and first_day_previous.year == begin_dt.year and ts['billable'] is True and activity_id in active_ids:
+            if start_date <= begin_dt.date() <= end_date and ts.get('billable') is True and activity_id in active_ids:
                 from_time_unrounded = begin_dt.strftime("%H:%M")
                 to_time_unrounded = ts["end"] and datetime.strptime(ts["end"], "%Y-%m-%dT%H:%M:%S%z").strftime("%H:%M") or ""
                 from_time_rounded, from_minutes_difference = self.time_rounding(from_time_unrounded)

@@ -479,8 +479,27 @@
             <div class="card">
                 <h2>🚀 Akce</h2>
 
+                <div class="form-group" style="background:#f5f5f5;padding:12px;border-radius:5px;margin-bottom:15px;">
+                    <label style="margin-bottom:8px;">Období reportu (nepovinné — prázdné = minulý měsíc):</label>
+                    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                        <input type="month" id="periodMonth" onchange="fillDatesFromMonth()" style="flex:1;">
+                        <button type="button" class="btn-secondary btn-small" onclick="clearPeriod()">Vymazat</button>
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <div style="flex:1;">
+                            <label style="font-size:12px;">Od:</label>
+                            <input type="date" id="periodStart">
+                        </div>
+                        <div style="flex:1;">
+                            <label style="font-size:12px;">Do:</label>
+                            <input type="date" id="periodEnd">
+                        </div>
+                    </div>
+                    <p id="periodHint" style="font-size:12px;color:#666;margin-top:8px;">Teď: minulý měsíc (výchozí)</p>
+                </div>
+
                 <button class="btn-success" style="width: 100%; margin-bottom: 10px; padding: 15px;" onclick="sendReportNow()">
-                    📤 Odeslat report nyní
+                    📤 Odeslat report
                 </button>
 
                 <button class="btn-primary" style="width: 100%; margin-bottom: 10px; padding: 15px;" onclick="loadFullPreview()">
@@ -489,6 +508,10 @@
 
                 <button class="btn-primary" style="width: 100%; margin-bottom: 10px; padding: 15px;" onclick="loadPreview()">
                     📋 Náhled dat z Kimai
+                </button>
+
+                <button class="btn-secondary" style="width: 100%; padding: 12px;" onclick="runDiagnostics()">
+                    🩺 Diagnostika připojení ke Kimai
                 </button>
             </div>
         </div>
@@ -627,16 +650,62 @@
             }
         }
 
+        // Období — pomocné funkce
+        function getPeriod() {
+            const start = document.getElementById('periodStart').value;
+            const end = document.getElementById('periodEnd').value;
+            if (start && end) return { start, end };
+            return null;
+        }
+
+        function periodQuery() {
+            const p = getPeriod();
+            return p ? `?start=${p.start}&end=${p.end}` : '';
+        }
+
+        function fillDatesFromMonth() {
+            const val = document.getElementById('periodMonth').value; // YYYY-MM
+            if (!val) return;
+            const [year, month] = val.split('-').map(Number);
+            const first = `${val}-01`;
+            const lastDay = new Date(year, month, 0).getDate();
+            const last = `${val}-${String(lastDay).padStart(2, '0')}`;
+            document.getElementById('periodStart').value = first;
+            document.getElementById('periodEnd').value = last;
+            updatePeriodHint();
+        }
+
+        function clearPeriod() {
+            document.getElementById('periodMonth').value = '';
+            document.getElementById('periodStart').value = '';
+            document.getElementById('periodEnd').value = '';
+            updatePeriodHint();
+        }
+
+        function updatePeriodHint() {
+            const p = getPeriod();
+            const hint = document.getElementById('periodHint');
+            hint.textContent = p ? `Teď: ${p.start} až ${p.end}` : 'Teď: minulý měsíc (výchozí)';
+        }
+
         // Odešli report teď
         async function sendReportNow() {
-            if (!confirm('Opravdu chceš nyní odeslat report?')) return;
+            const p = getPeriod();
+            const confirmMsg = p
+                ? `Opravdu odeslat report za období ${p.start} až ${p.end}?`
+                : 'Opravdu chceš nyní odeslat report za minulý měsíc?';
+            if (!confirm(confirmMsg)) return;
 
             const btn = event.target;
             btn.disabled = true;
             btn.textContent = 'Odesílám...';
 
             try {
-                const response = await fetch('/api/send-report', { method: 'POST' });
+                const response = await fetch('/api/send-report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(p || {})
+                });
                 const result = await response.json();
 
                 if (response.ok) {
@@ -649,7 +718,48 @@
                 showAlert('Chyba při odesílání: ' + error, 'error');
             } finally {
                 btn.disabled = false;
-                btn.textContent = '📤 Odeslat report nyní';
+                btn.textContent = '📤 Odeslat report';
+            }
+        }
+
+        // Diagnostika připojení ke Kimai
+        async function runDiagnostics() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = 'Testuji...';
+
+            try {
+                const response = await fetch('/api/diagnostics');
+                const result = await response.json();
+
+                let html = '<h3>Diagnostika Kimai</h3>';
+                html += `<p style="margin:10px 0;">Název projektu: <strong>${result.project_title}</strong> &nbsp;|&nbsp; Token nastaven: <strong>${result.token_set ? 'ano' : 'NE'}</strong></p>`;
+                result.hosts.forEach(h => {
+                    html += `<div style="border:1px solid #ddd;border-radius:5px;padding:10px;margin-bottom:10px;">`;
+                    html += `<strong>${h.host}</strong><br>`;
+                    if (h.root_error) {
+                        html += `<span style="color:#c0392b;">❌ Nedostupný: ${h.root_error}</span>`;
+                    } else {
+                        html += `Root: HTTP ${h.root_status}<br>`;
+                        html += `/api/timesheets: ${h.timesheets_error ? '❌ ' + h.timesheets_error : 'HTTP ' + h.timesheets_status}<br>`;
+                        if (h.activities_error) {
+                            html += `/api/activities: ❌ ${h.activities_error}`;
+                        } else {
+                            html += `/api/activities: HTTP ${h.activities_status}`;
+                            if (h.activities_total !== undefined) {
+                                html += ` (celkem ${h.activities_total}, pro projekt: <strong>${h.activities_matching_project}</strong>)`;
+                            }
+                        }
+                    }
+                    html += `</div>`;
+                });
+                html += '<p style="font-size:13px;color:#666;">401/403 = špatný token · "pro projekt: 0" = nesedí název projektu (KIMAI_PROJECT_TITLE) · Nedostupný = síť/firewall mezi kontejnerem a Kimai.</p>';
+                openModal(html);
+            } catch (error) {
+                showAlert('Chyba diagnostiky: ' + error, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🩺 Diagnostika připojení ke Kimai';
             }
         }
 
@@ -660,7 +770,7 @@
             btn.textContent = 'Načítám...';
 
             try {
-                const response = await fetch('/api/preview');
+                const response = await fetch('/api/preview' + periodQuery());
                 const result = await response.json();
 
                 if (response.ok && result.data.length > 0) {
@@ -698,7 +808,7 @@
             btn.textContent = 'Generuji náhled...';
 
             try {
-                const response = await fetch('/api/preview-full');
+                const response = await fetch('/api/preview-full' + periodQuery());
                 const result = await response.json();
 
                 if (response.ok) {
@@ -817,7 +927,7 @@
             loadHistory();
         });
 
-        // Umožni Enter na inputu pro email
+        // Umožni Enter na inputu pro email + sleduj změnu období
         document.addEventListener('DOMContentLoaded', () => {
             const input = document.getElementById('newRecipient');
             if (input) {
@@ -825,6 +935,10 @@
                     if (e.key === 'Enter') addRecipient();
                 });
             }
+            ['periodStart', 'periodEnd'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', updatePeriodHint);
+            });
         });
     </script>
 </body>

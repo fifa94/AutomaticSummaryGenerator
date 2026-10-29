@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import os
+import requests
 from dotenv import load_dotenv, find_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from ApiScraperFromKimai import ApiScraperFromKimai, DocumentGenerator, SendEmail
@@ -15,10 +16,29 @@ load_dotenv(find_dotenv())
 app = Flask(__name__)
 CORS(app)
 
-URL_LIST = [
-    "http://192.168.100.8:8001",
-    "http://192.168.191.211:8001"
-]
+def get_kimai_hosts():
+    """Sestaví seznam Kimai base URL z env (KIMAI_HOSTS, KIMAI_API_URL) + fallback."""
+    hosts = []
+    env_hosts = os.getenv('KIMAI_HOSTS')
+    if env_hosts:
+        hosts += [h.strip().rstrip('/') for h in env_hosts.split(',') if h.strip()]
+    api_url = os.getenv('KIMAI_API_URL')
+    if api_url:
+        base = api_url.rstrip('/')
+        for suffix in ('/api/timesheets', '/api/activities'):
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+        hosts.append(base.rstrip('/'))
+    hosts += ["http://192.168.100.8:8001", "http://192.168.191.211:8001"]
+    seen, result = set(), []
+    for h in hosts:
+        if h and h not in seen:
+            seen.add(h)
+            result.append(h)
+    return result
+
+URL_LIST = get_kimai_hosts()
+PROJECT_TITLE = os.getenv('KIMAI_PROJECT_TITLE', 'Lexikografický projekt 1')
 
 BEARER_TOKEN = os.getenv('KIMAI_API_TOKEN')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', '/app/output')
@@ -60,7 +80,17 @@ def duration_to_hours(dur: str) -> float:
     hours, minutes = parts
     return int(hours) + (int(minutes) / 60)
 
-def generate_and_send_report():
+def parse_period(start_str, end_str):
+    """Z řetězců YYYY-MM-DD vrátí (start_date, end_date) nebo (None, None)."""
+    if not start_str or not end_str:
+        return None, None
+    start = datetime.strptime(start_str, '%Y-%m-%d').date()
+    end = datetime.strptime(end_str, '%Y-%m-%d').date()
+    if start > end:
+        start, end = end, start
+    return start, end
+
+def generate_and_send_report(period_start=None, period_end=None):
     """Vygeneruje a odešle report příjemcům z konfigurace.
 
     Vrací (success: bool, message: str). Zapisuje záznam do historie.
@@ -77,7 +107,7 @@ def generate_and_send_report():
         return False, 'Nelze se připojit k Kimai'
 
     scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, 'admin')
-    data = scraper.process_timesheets()
+    data = scraper.process_timesheets(period_start=period_start, period_end=period_end)
 
     if not data:
         add_report_history(config['recipients'], 'failed', error_message='Žádná data k vygenerování')
@@ -180,12 +210,13 @@ def save_config_api():
 def preview_report():
     """Vrátí data pro náhled."""
     try:
+        period_start, period_end = parse_period(request.args.get('start'), request.args.get('end'))
         active_host = get_active_host()
         if not active_host:
             return jsonify({'error': 'Nelze se připojit k Kimai'}), 500
 
         scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, 'admin')
-        data = scraper.process_timesheets()
+        data = scraper.process_timesheets(period_start=period_start, period_end=period_end)
 
         if not data:
             return jsonify({'error': 'Žádná data pro náhled'}), 404
@@ -209,12 +240,13 @@ def preview_full_report():
     """Vrátí kompletní HTML náhled reportu."""
     try:
         config = get_config()
+        period_start, period_end = parse_period(request.args.get('start'), request.args.get('end'))
         active_host = get_active_host()
         if not active_host:
             return jsonify({'error': 'Nelze se připojit k Kimai'}), 500
 
         scraper = ApiScraperFromKimai(active_host, BEARER_TOKEN, 'admin')
-        data = scraper.process_timesheets()
+        data = scraper.process_timesheets(period_start=period_start, period_end=period_end)
 
         if not data:
             return jsonify({'error': 'Žádná data pro náhled'}), 404
@@ -378,15 +410,51 @@ def preview_full_report():
 
 @app.route('/api/send-report', methods=['POST'])
 def send_report():
-    """Okamžitě odešle report."""
+    """Okamžitě odešle report. Volitelně za zadané období (start, end)."""
     try:
-        success, message = generate_and_send_report()
+        data = request.get_json(silent=True) or {}
+        period_start, period_end = parse_period(data.get('start'), data.get('end'))
+        success, message = generate_and_send_report(period_start=period_start, period_end=period_end)
         if success:
             return jsonify({'success': True, 'message': 'Report úspěšně odeslán', 'file': message})
         return jsonify({'error': message}), 400
     except Exception as e:
         add_report_history([], 'failed', error_message=str(e))
         return jsonify({'error': f'Chyba: {str(e)}'}), 500
+
+@app.route('/api/diagnostics', methods=['GET'])
+def diagnostics():
+    """Ověří dostupnost Kimai a vrátí, kde případně vázne spojení."""
+    result = {'project_title': PROJECT_TITLE, 'token_set': bool(BEARER_TOKEN), 'hosts': []}
+    headers = {'Authorization': f'Bearer {BEARER_TOKEN}'}
+    for host in URL_LIST:
+        entry = {'host': host}
+        try:
+            r = requests.get(host, timeout=3)
+            entry['root_status'] = r.status_code
+        except Exception as e:
+            entry['root_error'] = str(e)
+            result['hosts'].append(entry)
+            continue
+        try:
+            r = requests.get(f"{host}/api/timesheets", headers=headers, params={'size': 1}, timeout=5)
+            entry['timesheets_status'] = r.status_code
+        except Exception as e:
+            entry['timesheets_error'] = str(e)
+        try:
+            r = requests.get(f"{host}/api/activities", headers=headers, timeout=5)
+            entry['activities_status'] = r.status_code
+            if r.status_code == 200:
+                acts = r.json()
+                entry['activities_total'] = len(acts)
+                entry['activities_matching_project'] = sum(
+                    1 for a in acts
+                    if a.get('visible') is True and a.get('parentTitle') == PROJECT_TITLE
+                )
+        except Exception as e:
+            entry['activities_error'] = str(e)
+        result['hosts'].append(entry)
+    return jsonify(result)
 
 @app.route('/api/history', methods=['GET'])
 def history():
